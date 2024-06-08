@@ -27,7 +27,7 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022, 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -903,6 +903,23 @@ typedef enum {
     PAL_PARAM_ID_VOLUME_USING_SET_PARAM = 55,
     PAL_PARAM_ID_UHQA_FLAG = 56,
     PAL_PARAM_ID_STREAM_ATTRIBUTES = 57,
+    PAL_PARAM_ID_SET_UPD_DUTY_CYCLE = 58,
+    PAL_PARAM_ID_MSPP_LINEAR_GAIN = 59,
+    PAL_PARAM_ID_SET_SOURCE_METADATA = 60,
+    PAL_PARAM_ID_SET_SINK_METADATA = 61,
+    PAL_PARAM_ID_ULTRASOUND_RAMPDOWN = 62,
+    PAL_PARAM_ID_VOLUME_CTRL_RAMP = 63,
+    PAL_PARAM_ID_SVA_WAKEUP_MODULE_VERSION = 64,
+    PAL_PARAM_ID_GAIN_USING_SET_PARAM = 65,
+    PAL_PARAM_ID_HAPTICS_CNFG = 66,
+    PAL_PARAM_ID_WAKEUP_ENGINE_PER_MODEL_RESET = 67,
+    PAL_PARAM_ID_RECONFIG_ENCODER = 68,
+    PAL_PARAM_ID_VUI_SET_META_DATA = 69,
+    PAL_PARAM_ID_VUI_GET_META_DATA = 70,
+    PAL_PARAM_ID_VUI_CAPTURE_META_DATA = 71,
+    PAL_PARAM_ID_TIMESTRETCH_PARAMS = 72,
+    PAL_PARAM_ID_LATENCY_MODE = 73,
+    PAL_PARAM_ID_PROXY_RECORD_SESSION = 74,
 } pal_param_id_type_t;
 
 /** HDMI/DP */
@@ -941,6 +958,10 @@ struct pal_amp_db_and_gain_table {
     float    amp;
     float    db;
     uint32_t level;
+};
+
+struct pal_vol_ctrl_ramp_param {
+    uint32_t ramp_period_ms;
 };
 
 /* Payload For ID: PAL_PARAM_ID_DEVICE_CONNECTION
@@ -1111,7 +1132,7 @@ typedef struct pal_bt_tws_payload_s {
  * Description : Used by PAL client to customize
  *               the device related information.
 */
-#define PAL_MAX_CUSTOM_KEY_SIZE 128
+#define PAL_MAX_CUSTOM_KEY_SIZE 256
 typedef struct pal_device_custom_config {
     char custom_key[PAL_MAX_CUSTOM_KEY_SIZE];
 } pal_device_custom_config_t;
