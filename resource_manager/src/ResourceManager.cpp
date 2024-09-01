@@ -27,37 +27,8 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright
- *     notice, this list of conditions and the following disclaimer.
- *
- *   * Redistributions in binary form must reproduce the above
- *     copyright notice, this list of conditions and the following
- *     disclaimer in the documentation and/or other materials provided
- *     with the distribution.
- *
- *   * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *     contributors may be used to endorse or promote products derived
- *     from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #define LOG_TAG "PAL: ResourceManager"
@@ -94,6 +65,7 @@
 #include <dlfcn.h>
 #include <mutex>
 #include <sys/ioctl.h>
+#include "fluence_ffv_common_calibration.h"
 #ifdef EC_REF_CAPTURE_ENABLED
 #include "ECRefDevice.h"
 #endif
@@ -106,6 +78,9 @@
 #define XML_FILE_EXT ".xml"
 #define XML_PATH_MAX_LENGTH 100
 #define HW_INFO_ARRAY_MAX_SIZE 32
+
+#define PRIMARY_MIC 0
+#define SECONDARY_MIC 1
 
 #define VBAT_BCL_SUFFIX "-vbat"
 
@@ -481,6 +456,7 @@ bool ResourceManager::isContextManagerEnabled = false;
 bool ResourceManager::isVIRecordStarted;
 bool ResourceManager::lpi_logging_ = false;
 bool ResourceManager::isUpdDedicatedBeEnabled = false;
+bool ResourceManager::isUpdSetCustomGainEnabled = false;
 int ResourceManager::max_voice_vol = -1;     /* Variable to store max volume index for voice call */
 bool ResourceManager::isSignalHandlerEnabled = false;
 bool ResourceManager::a2dp_suspended = false;
@@ -679,6 +655,64 @@ void ResourceManager::sendCrashSignal(int signal, pid_t pid, uid_t uid)
     ALOGV("%s: signal %d, pid %u, uid %u", __func__, signal, pid, uid);
     struct agm_dump_info dump_info = {signal, (uint32_t)pid, (uint32_t)uid};
     agm_dump(&dump_info);
+}
+
+int32_t ResourceManager::updateMicOcclusionInfo(Stream *s, void *data)
+{
+    PAL_DBG(LOG_TAG, "Enter %s", __func__);
+
+    event_id_mic_occlusion_status_info_t *mic_info = nullptr;
+    uint16_t occlusionState;
+
+    mic_info = (struct event_id_mic_occlusion_status_info_t *)data;
+    occlusionState = mic_info->occlusion_state;
+
+    auto it = micOcclusionInfoMap.find(s);
+
+    if (it == micOcclusionInfoMap.end()) {
+        /*if didn't find entry add new and update*/
+        addMicOcclusionInfo(s);
+    }
+
+    switch (occlusionState) {
+        case MIC_OCC_STATE_NO_OCCLUSION:
+            PAL_DBG(LOG_TAG," mic occ state: %d", occlusionState);
+            for (int i = 0; i < micOcclusionInfoMap[s].size(); i++) {
+                if (micOcclusionInfoMap[s][i].is_occluded) {
+                    /* previously mic was occluded , mark recovered*/
+                    micOcclusionInfoMap[s][i].is_occluded = false;
+                    micOcclusionInfoMap[s][i].num_of_recovery++;
+                }
+            }
+        break;
+        case MIC_OCC_STATE_MIC0_BLOCKED:
+            PAL_DBG(LOG_TAG," mic occ state: %d", occlusionState);
+            if (micOcclusionInfoMap[s][SECONDARY_MIC].is_occluded) {
+                /* previously secondary mic was occluded , mark it recovered.*/
+                micOcclusionInfoMap[s][SECONDARY_MIC].is_occluded = false;
+                micOcclusionInfoMap[s][SECONDARY_MIC].num_of_recovery++;
+            } /* previously none of the mic occluded */
+
+            micOcclusionInfoMap[s][PRIMARY_MIC].is_occluded = true;
+            micOcclusionInfoMap[s][PRIMARY_MIC].num_of_occlusion++;
+        break;
+        case MIC_OCC_STATE_MIC1_BLOCKED:
+            PAL_DBG(LOG_TAG," mic occ state: %d", occlusionState);
+            if (micOcclusionInfoMap[s][PRIMARY_MIC].is_occluded) {
+                /* previously primary mic was occluded , mark it recovered. */
+                micOcclusionInfoMap[s][PRIMARY_MIC].is_occluded = false;
+                micOcclusionInfoMap[s][PRIMARY_MIC].num_of_recovery++;
+            } /* previously none of the mic occluded */
+
+            micOcclusionInfoMap[s][SECONDARY_MIC].is_occluded = true;
+            micOcclusionInfoMap[s][SECONDARY_MIC].num_of_occlusion++;
+        break;
+        default:
+            PAL_DBG(LOG_TAG," Incorrect mic occ state: %d", occlusionState);
+    }
+
+    PAL_DBG(LOG_TAG, "Exit %s", __func__);
+    return 0;
 }
 
 ResourceManager::ResourceManager()
@@ -2849,6 +2883,57 @@ int ResourceManager::isActiveStream(pal_stream_handle_t *handle) {
     return false;
 }
 
+void ResourceManager::addMicOcclusionInfo(Stream *s) {
+    std::vector <struct pal_device> palDevs;
+    pal_device_id_t dev_id = PAL_DEVICE_NONE;
+
+    if (s == nullptr) {
+        PAL_ERR(LOG_TAG,"stream handle s is null");
+        return;
+    }
+
+    s->getAssociatedPalDevices(palDevs);
+
+    if (palDevs.size() == 0) {
+       PAL_ERR(LOG_TAG,"empty device vector can't add new entry in map");
+       return;
+    }
+
+    for (int i = 0; i < palDevs.size(); i++) {
+        if (isInputDevId(palDevs[i].id)) {
+            dev_id = palDevs[i].id;
+            PAL_DBG(LOG_TAG," device = %d for mic map", dev_id);
+            break;
+        }
+    }
+
+    if (dev_id == PAL_DEVICE_NONE) {
+       PAL_ERR(LOG_TAG,"no input device found, can't add new entry in map");
+       return;
+    }
+
+    if (micOcclusionInfoMap.find(s) == micOcclusionInfoMap.end()) {
+        pal_param_mic_occlusion_info_t mic_info = {dev_id, false, 0, 0};
+        std::vector<pal_param_mic_occlusion_info_t> micInfoVector;
+        micInfoVector.push_back(mic_info);
+        micInfoVector.push_back(mic_info);
+        micOcclusionInfoMap[s]= micInfoVector;
+    }
+}
+
+void ResourceManager::removeMicOcclusionInfo(Stream *s)
+{
+    if (s == nullptr) {
+        PAL_ERR(LOG_TAG,"stream handle s is null");
+        return;
+    }
+
+    auto it = micOcclusionInfoMap.find(s);
+    if (it != micOcclusionInfoMap.end()) {
+        micOcclusionInfoMap.erase(it);
+    }
+}
+
 int ResourceManager::initStreamUserCounter(Stream *s)
 {
     lockValidStreamMutex();
@@ -3298,6 +3383,15 @@ int ResourceManager::registerDevice(std::shared_ptr<Device> d, Stream *s)
     }
 
 unlock:
+    if (IsCustomGainEnabledForUPD() &&
+            (1 == d->getDeviceCount())) {
+        /* Try to set Ultrasound Gain if needed */
+        if (PAL_DEVICE_OUT_SPEAKER == d->getSndDeviceId()) {
+            setUltrasoundGain(PAL_ULTRASOUND_GAIN_HIGH, s);
+        } else if (PAL_DEVICE_OUT_HANDSET == d->getSndDeviceId()) {
+            setUltrasoundGain(PAL_ULTRASOUND_GAIN_LOW, s);
+        }
+    }
     mResourceManagerMutex.unlock();
 exit:
     PAL_DBG(LOG_TAG, "Exit. status: %d", status);
@@ -3435,6 +3529,14 @@ int ResourceManager::deregisterDevice(std::shared_ptr<Device> d, Stream *s)
         }
     }
 unlock:
+
+    if (IsCustomGainEnabledForUPD() &&
+            (1 == d->getDeviceCount()) &&
+            ((PAL_DEVICE_OUT_SPEAKER == d->getSndDeviceId()) ||
+             (PAL_DEVICE_OUT_HANDSET == d->getSndDeviceId()))) {
+        setUltrasoundGain(PAL_ULTRASOUND_GAIN_MUTE, s);
+    }
+
     mResourceManagerMutex.unlock();
 exit:
     PAL_DBG(LOG_TAG, "Exit. status: %d", status);
@@ -3530,14 +3632,17 @@ int ResourceManager::removePlugInDevice(pal_device_id_t device_id,
     return ret;
 }
 
-int ResourceManager::getActiveDevices(std::vector<std::shared_ptr<Device>> &deviceList)
+void ResourceManager::getActiveDevices_l(std::vector<std::shared_ptr<Device>> &deviceList)
 {
-    int ret = 0;
-    mResourceManagerMutex.lock();
     for (int i = 0; i < active_devices.size(); i++)
         deviceList.push_back(active_devices[i].first);
+}
+
+void ResourceManager::getActiveDevices(std::vector<std::shared_ptr<Device>> &deviceList)
+{
+    mResourceManagerMutex.lock();
+    getActiveDevices_l(deviceList);
     mResourceManagerMutex.unlock();
-    return ret;
 }
 
 int ResourceManager::getAudioRoute(struct audio_route** ar)
@@ -3647,6 +3752,11 @@ bool ResourceManager::IsLPISupported(pal_stream_type_t type) {
 bool ResourceManager::IsDedicatedBEForUPDEnabled()
 {
     return ResourceManager::isUpdDedicatedBeEnabled;
+}
+
+bool ResourceManager::IsCustomGainEnabledForUPD()
+{
+    return ResourceManager::isUpdSetCustomGainEnabled;
 }
 
 void ResourceManager::GetSoundTriggerConcurrencyCount(
@@ -4192,6 +4302,35 @@ void ResourceManager::mixerEventWaitThreadLoop(
     mixer_subscribe_events(mixer, 0);
 }
 
+int ResourceManager::getPcmIdByDevInfoName(char *mixer_str) {
+    int pcm_id = 0;
+    std::string event_str(mixer_str);
+
+    if (!mixer_str) {
+        PAL_ERR(LOG_TAG,"empty mixer str");
+        return -EINVAL;
+    }
+
+    int idx = event_str.find(" ");
+    if (idx == std::string::npos) {
+        PAL_ERR(LOG_TAG,"space index not found");
+        return -EINVAL;
+    }
+
+    std::string event_name = event_str.substr(0,idx);
+
+    for (int i = 0; i < devInfo.size();i++) {
+        if (strcmp(event_name.c_str(), devInfo[i].name) == 0) {
+            pcm_id = devInfo[i].deviceId;
+            return pcm_id;
+        }
+    }
+
+    //not found.
+    PAL_ERR(LOG_TAG,"pcm id not found");
+    return -EINVAL;
+}
+
 int ResourceManager::handleMixerEvent(struct mixer *mixer, char *mixer_str) {
     int status = 0;
     int pcm_id = 0;
@@ -4201,6 +4340,7 @@ int ResourceManager::handleMixerEvent(struct mixer *mixer, char *mixer_str) {
     // TODO: hard code in common defs
     std::string pcm_prefix = "PCM";
     std::string compress_prefix = "COMPRESS";
+    std::string voice_prefix = "VOICEMMODE";
     std::string event_suffix = "event";
     size_t prefix_idx = 0;
     size_t suffix_idx = 0;
@@ -4250,9 +4390,20 @@ int ResourceManager::handleMixerEvent(struct mixer *mixer, char *mixer_str) {
     if (prefix_idx == event_str.npos) {
         prefix_idx = event_str.find(compress_prefix);
         if (prefix_idx == event_str.npos) {
-            PAL_ERR(LOG_TAG, "Invalid mixer event");
-            status = -EINVAL;
-            goto exit;
+            prefix_idx = event_str.find(voice_prefix);
+            if (prefix_idx == event_str.npos) {
+                PAL_ERR(LOG_TAG, "Invalid mixer event");
+                status = -EINVAL;
+                goto exit;
+            } else { /*find pcm_id for voice call case*/
+                pcm_id = getPcmIdByDevInfoName(mixer_str);
+                if (pcm_id < 0) {
+                    PAL_ERR(LOG_TAG, "Invalid mixer event");
+                    status = -EINVAL;
+                    goto exit;
+                }
+                goto acquire_cb;
+            }
         } else {
             prefix_idx += compress_prefix.length();
         }
@@ -4270,6 +4421,7 @@ int ResourceManager::handleMixerEvent(struct mixer *mixer, char *mixer_str) {
     length = suffix_idx - prefix_idx;
     pcm_id = std::stoi(event_str.substr(prefix_idx, length));
 
+acquire_cb:
     // acquire callback/cookie with pcm dev id
     it = mixerEventCallbackMap.find(pcm_id);
     if (it != mixerEventCallbackMap.end()) {
@@ -7214,6 +7366,7 @@ int ResourceManager::setConfigParams(struct str_parms *parms)
     ret = setContextManagerEnableParam(parms, value, len);
 
     ret = setUpdDedicatedBeEnableParam(parms, value, len);
+    ret = setUpdCustomGainParam(parms, value, len);
     ret = setDualMonoEnableParam(parms, value, len);
     ret = setSignalHandlerEnableParam(parms, value, len);
 
@@ -7437,6 +7590,30 @@ int ResourceManager::setNativeAudioParams(struct str_parms *parms,
     }
     return ret;
 }
+
+int ResourceManager::setUpdCustomGainParam(struct str_parms *parms,
+                                 char *value, int len)
+{
+    int ret = -EINVAL;
+
+    if (!value || !parms)
+        return ret;
+
+    ret = str_parms_get_str(parms, AUDIO_PARAMETER_KEY_UPD_SET_CUSTOM_GAIN,
+                            value, len);
+    PAL_VERBOSE(LOG_TAG," value %s", value);
+
+    if (ret >= 0) {
+        if (value && !strncmp(value, "true", sizeof("true")))
+            ResourceManager::isUpdSetCustomGainEnabled = true;
+
+        str_parms_del(parms, AUDIO_PARAMETER_KEY_UPD_SET_CUSTOM_GAIN);
+    }
+
+    return ret;
+
+}
+
 void ResourceManager::updatePcmId(int32_t deviceId, int32_t pcmId)
 {
     if (isValidDevId(deviceId)) {
@@ -8131,6 +8308,19 @@ int ResourceManager::getParameter(uint32_t param_id, void **param_payload,
 
             *payload_size = sizeof(isHifiFilterEnabled);
             **(bool **)param_payload = isHifiFilterEnabled;
+        }
+        break;
+        case PAL_PARAM_ID_MIC_OCCLUSION_INFO:
+        {
+            PAL_INFO(LOG_TAG, "get parameter for Mic Occlusion Info");
+            auto micInfoVec = new std::vector<std::vector<pal_param_mic_occlusion_info_t>>;
+            for (const auto& it : micOcclusionInfoMap )
+            {
+                micInfoVec->push_back(it.second);
+            }
+
+        *payload_size = sizeof(micInfoVec);
+        *param_payload = static_cast<void*>(micInfoVec);
         }
         break;
         default:
@@ -11303,4 +11493,128 @@ bool ResourceManager::doDevAttrDiffer(struct pal_device *inDevAttr,
 
 exit:
     return ret;
+}
+
+int ResourceManager::setUltrasoundGain(pal_ultrasound_gain_t gain, Stream *s)
+{
+    int32_t status = 0;
+
+    struct pal_device dAttr;
+    StreamUltraSound *updStream = NULL;
+    std::vector<Stream*> activeStreams;
+    struct pal_stream_attributes sAttr;
+    struct pal_stream_attributes sAttr1;
+    std::vector<std::shared_ptr<Device>> activeDeviceList;
+    pal_ultrasound_gain_t gain_2 = PAL_ULTRASOUND_GAIN_MUTE;
+
+    PAL_INFO(LOG_TAG, "Entered. Gain = %d", gain);
+
+    if (!IsCustomGainEnabledForUPD()) {
+        PAL_ERR(LOG_TAG,"Custom Gain not enabled for UPD, returning");
+        return status;
+    }
+
+    if (s) {
+        status = s->getStreamAttributes(&sAttr);
+        if (status != 0) {
+            PAL_ERR(LOG_TAG,"stream get attributes failed");
+            return -ENOENT;
+        }
+    }
+
+    if (PAL_STREAM_ULTRASOUND == sAttr.type) {
+        updStream =  static_cast<StreamUltraSound *> (s);
+    } else {
+        status = getActiveStream_l(activeStreams, NULL);
+        if ((0 != status) || (activeStreams.size() == 0)) {
+            PAL_DBG(LOG_TAG, "No active stream available, status = %d, nStream = %d",
+                    status, activeStreams.size());
+            return -ENOENT;
+        }
+
+        for (int i = 0; i < activeStreams.size(); i++) {
+            status = (static_cast<Stream *> (activeStreams[i]))->getStreamAttributes(&sAttr1);
+            if (0 != status) {
+                PAL_DBG(LOG_TAG, "Fail to get Stream Attributes, status = %d", status);
+                continue;
+            }
+
+            if (PAL_STREAM_ULTRASOUND == sAttr1.type) {
+                updStream = static_cast<StreamUltraSound *> (activeStreams[i]);
+                /* Found UPD stream, break here */
+                PAL_INFO(LOG_TAG, "Found UPD Stream = %p", updStream);
+                break;
+            }
+        }
+    }
+    /* Skip if we do not found upd stream or UPD stream is not active*/
+    if (!updStream || !updStream->isActive()) {
+        PAL_INFO(LOG_TAG, "Either UPD Stream not found or not active, returning");
+        return 0;
+    }
+
+
+    if (!isDeviceSwitch && (PAL_STREAM_ULTRASOUND != sAttr.type))
+        status = updStream->setUltraSoundGain(gain);
+    else
+        status = updStream->setUltraSoundGain_l(gain);
+
+    if (0 != status) {
+        PAL_ERR(LOG_TAG, "SetParameters failed, status = %d", status);
+        return status;
+    }
+
+    PAL_INFO(LOG_TAG, "Ultrasound gain(%d) set, status = %d", gain, status);
+
+    /* If provided gain is MUTE then in some cases we may need to set new gain LOW/HIGH based on
+     * concurrencies.
+     *
+     * Skip setting new gain if,
+     * - currently set gain is not Mute
+     * - or if device switch is active (new gain will be set once new device is active)
+     *
+     * This should avoid multiple set gain calls while stream is being closed/in middle of device switch
+     */
+
+    if ((PAL_ULTRASOUND_GAIN_MUTE != gain) || isDeviceSwitch) {
+        return 0;
+    }
+
+    /* Find new GAIN value based on currently active devices */
+    getActiveDevices_l(activeDeviceList);
+    for (int i = 0; i < activeDeviceList.size(); i++) {
+        status = activeDeviceList[i]->getDeviceAttributes(&dAttr);
+        if (0 != status) {
+            PAL_ERR(LOG_TAG, "Fail to get device attribute for device %p, status = %d",
+                    &activeDeviceList[i], status);
+            continue;
+        }
+        if (PAL_DEVICE_OUT_SPEAKER == dAttr.id) {
+            gain_2 = PAL_ULTRASOUND_GAIN_HIGH;
+            /* Only breaking here as we want to give priority to speaker device */
+            break;
+        } else if ((PAL_DEVICE_OUT_ULTRASOUND == dAttr.id) ||
+                   (PAL_DEVICE_OUT_HANDSET == dAttr.id)) {
+            gain_2 = PAL_ULTRASOUND_GAIN_LOW;
+        }
+    }
+
+    if (PAL_ULTRASOUND_GAIN_MUTE != gain_2) {
+        /* Currently configured value is 20ms which allows 3 to 4 process call
+         * to handle this value at ADSP side.
+         * Increase or decrease this dealy based on requirements */
+        usleep(20000);
+        if (PAL_STREAM_ULTRASOUND != sAttr.type)
+            status = updStream->setUltraSoundGain(gain_2);
+        else
+            status = updStream->setUltraSoundGain_l(gain_2);
+
+        if (0 != status) {
+            PAL_ERR(LOG_TAG, "SetParameters failed, status = %d", status);
+            return status;
+        }
+        PAL_INFO(LOG_TAG, "Ultrasound gain(%d) set, status = %d", gain_2, status);
+    }
+
+    return status;
 }
