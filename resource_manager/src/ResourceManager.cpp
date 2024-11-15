@@ -447,7 +447,7 @@ bool ResourceManager::isCpsEnabled = false;
 bool ResourceManager::isVbatEnabled = false;
 static int max_nt_sessions;
 bool ResourceManager::isRasEnabled = false;
-bool ResourceManager::isMainSpeakerRight;
+int ResourceManager::monoSpeakerPosition = SPKR_RIGHT;
 int ResourceManager::spQuickCalTime;
 bool ResourceManager::isGaplessEnabled = false;
 bool ResourceManager::isDualMonoEnabled = false;
@@ -10843,10 +10843,12 @@ void ResourceManager::process_device_info(struct xml_userdata *data, const XML_C
                         deviceInfo[size].bit_width);
                 deviceInfo[size].bit_width = BITWIDTH_16;
             }
-        }
-        else if (!strcmp(tag_name, "speaker_mono_right")) {
-            if (atoi(data->data_buf))
-                isMainSpeakerRight = true;
+        } else if (!strcmp(tag_name, "mono_speaker_position")) {
+            std::map<std::string, int>::iterator iter =
+                spkrPosTable.find(std::string(data->data_buf));
+            if (iter != spkrPosTable.end())
+                monoSpeakerPosition = iter->second;
+            PAL_DBG(LOG_TAG, "monoSpeakerPosition %d", monoSpeakerPosition);
         } else if (!strcmp(tag_name, "quick_cal_time")) {
             spQuickCalTime = atoi(data->data_buf);
         }else if (!strcmp(tag_name, "ras_enabled")) {
