@@ -64,13 +64,6 @@ typedef enum speaker_prot_proc_state {
     SPKR_PROCESSING_IN_PROGRESS, /* Processing mode in running state */
 }spkr_prot_proc_state;
 
-enum {
-    SPKR_RIGHT,    /* Right Speaker */
-    SPKR_LEFT,     /* Left Speaker */
-    SPKR_TOP,      /* Top Speaker */
-    SPKR_BOTTOM,   /* Bottom Speaker */
-};
-
 struct agmMetaData {
     uint8_t *buf;
     uint32_t size;

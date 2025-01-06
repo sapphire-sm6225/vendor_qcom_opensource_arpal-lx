@@ -447,7 +447,7 @@ bool ResourceManager::isCpsEnabled = false;
 bool ResourceManager::isVbatEnabled = false;
 static int max_nt_sessions;
 bool ResourceManager::isRasEnabled = false;
-bool ResourceManager::isMainSpeakerRight;
+int ResourceManager::monoSpeakerPosition = SPKR_RIGHT;
 int ResourceManager::spQuickCalTime;
 bool ResourceManager::isGaplessEnabled = false;
 bool ResourceManager::isDualMonoEnabled = false;
@@ -6780,9 +6780,7 @@ int ResourceManager::findActiveStreamsNotInDisconnectList(
 
     mActiveStreamMutex.lock();
 
-    ret = rm->getActiveStream_l(activeStreams, devObj);
-    if (ret)
-        goto done;
+    rm->getActiveStream_l(activeStreams, devObj);
 
     PAL_DBG(LOG_TAG, "activeStreams size = %d, device: %s", activeStreams.size(),
             deviceNameLUT.at((pal_device_id_t)devObj->getSndDeviceId()).c_str());
@@ -7431,6 +7429,7 @@ int32_t ResourceManager::forceDeviceSwitch(std::shared_ptr<Device> inDev,
     int status = 0;
     std::vector <std::tuple<Stream *, uint32_t>> streamDevDisconnect, streamsSkippingSwitch;
     std::vector <std::tuple<Stream *, struct pal_device *>> streamDevConnect;
+    std::vector <std::tuple<Stream *, uint32_t>> sharedBEStreamDev;
     std::vector<Stream*>::iterator sIter;
 
     if (!inDev || !newDevAttr) {
@@ -7462,6 +7461,31 @@ int32_t ResourceManager::forceDeviceSwitch(std::shared_ptr<Device> inDev,
     }
 
     status = streamDevSwitch(streamDevDisconnect, streamDevConnect);
+    if (status) {
+        PAL_ERR(LOG_TAG, "forceDeviceSwitch failed %d, reset usecases", status);
+        struct pal_device curDevAttr  = {};
+        std::shared_ptr<Device> curDev = nullptr;
+
+        mActiveStreamMutex.lock();
+        getSharedBEActiveStreamDevs(sharedBEStreamDev, newDevAttr->id);
+        if (sharedBEStreamDev.size() > 0) {
+            curDevAttr.id = (pal_device_id_t)std::get<1>(sharedBEStreamDev[0]);
+            curDev = Device::getInstance(&curDevAttr, rm);
+            if (!curDev) {
+                PAL_ERR(LOG_TAG, "Getting Device instance failed");
+                return 0;
+            }
+            curDev->getDeviceAttributes(&curDevAttr);
+            ar_mem_cpy(newDevAttr, sizeof(struct pal_device),
+                      &curDevAttr, sizeof(struct pal_device));
+            for (const auto &elem : sharedBEStreamDev) {
+                streamDevDisconnect.push_back(elem);
+                streamDevConnect.push_back({std::get<0>(elem), &curDevAttr});
+            }
+        }
+        mActiveStreamMutex.unlock();
+        status = streamDevSwitch(streamDevDisconnect, streamDevConnect);
+    }
     if (!status) {
         mActiveStreamMutex.lock();
         for (sIter = prevActiveStreams.begin(); sIter != prevActiveStreams.end(); sIter++) {
@@ -7473,8 +7497,6 @@ int32_t ResourceManager::forceDeviceSwitch(std::shared_ptr<Device> inDev,
             }
         }
         mActiveStreamMutex.unlock();
-    } else {
-        PAL_ERR(LOG_TAG, "forceDeviceSwitch failed %d", status);
     }
 
     return 0;
@@ -10821,10 +10843,12 @@ void ResourceManager::process_device_info(struct xml_userdata *data, const XML_C
                         deviceInfo[size].bit_width);
                 deviceInfo[size].bit_width = BITWIDTH_16;
             }
-        }
-        else if (!strcmp(tag_name, "speaker_mono_right")) {
-            if (atoi(data->data_buf))
-                isMainSpeakerRight = true;
+        } else if (!strcmp(tag_name, "mono_speaker_position")) {
+            std::map<std::string, int>::iterator iter =
+                spkrPosTable.find(std::string(data->data_buf));
+            if (iter != spkrPosTable.end())
+                monoSpeakerPosition = iter->second;
+            PAL_DBG(LOG_TAG, "monoSpeakerPosition %d", monoSpeakerPosition);
         } else if (!strcmp(tag_name, "quick_cal_time")) {
             spQuickCalTime = atoi(data->data_buf);
         }else if (!strcmp(tag_name, "ras_enabled")) {
