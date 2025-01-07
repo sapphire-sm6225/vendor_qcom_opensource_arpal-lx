@@ -248,6 +248,13 @@ typedef struct pal_spkr_prot_payload {
     pal_spkr_prot_mode operationMode;/* Type of mode for which request is raised */
 } pal_spkr_prot_payload;
 
+enum {
+    SPKR_RIGHT,    /* Right Speaker */
+    SPKR_LEFT,     /* Left Speaker */
+    SPKR_TOP,      /* Top Speaker */
+    SPKR_BOTTOM,   /* Bottom Speaker */
+};
+
 typedef enum {
     GEF_PARAM_READ = 0,
     GEF_PARAM_WRITE,

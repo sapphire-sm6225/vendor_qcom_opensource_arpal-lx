@@ -2101,7 +2101,7 @@ void BtSco::convertCodecInfo(audio_lc3_codec_cfg_t &lc3CodecInfo,
     std::string vendorStr(lc3Cfg.vendor);
     std::string streamMapStr(lc3Cfg.streamMap);
     std::regex vendorPattern("([0-9a-fA-F]{2})[,[:s:]]?");
-    std::regex streamMapPattern("([0-9])[,[:s:]]+([0-9])[,[:s:]]+([MLR])");
+    std::regex streamMapPattern("([0-9])[,[:s:]]+([0-9])[,[:s:]]+([MLRS])");
     std::smatch match;
 
     // convert and fill in encoder cfg
@@ -2115,6 +2115,7 @@ void BtSco::convertCodecInfo(audio_lc3_codec_cfg_t &lc3CodecInfo,
     lc3CodecInfo.enc_cfg.toAirConfig.num_blocks           = lc3Cfg.num_blocks;
     lc3CodecInfo.enc_cfg.toAirConfig.default_q_level      = 0;
     lc3CodecInfo.enc_cfg.toAirConfig.mode                 = 0x1;
+    lc3CodecInfo.is_enc_config_set                        = true;
 
     // convert and fill in decoder cfg
     lc3CodecInfo.dec_cfg.fromAirConfig.sampling_freq        = LC3_CSC[lc3Cfg.rxconfig_index].sampling_freq;
@@ -2127,6 +2128,7 @@ void BtSco::convertCodecInfo(audio_lc3_codec_cfg_t &lc3CodecInfo,
     lc3CodecInfo.dec_cfg.fromAirConfig.num_blocks           = lc3Cfg.num_blocks;
     lc3CodecInfo.dec_cfg.fromAirConfig.default_q_level      = 0;
     lc3CodecInfo.dec_cfg.fromAirConfig.mode                 = 0x1;
+    lc3CodecInfo.is_dec_config_set                          = true;
 
     // parse vendor specific string
     idx = 15;
@@ -2153,9 +2155,11 @@ void BtSco::convertCodecInfo(audio_lc3_codec_cfg_t &lc3CodecInfo,
             audio_location = 1;
         } else if (!strcmp(match[3].str().c_str(), "R")) {
             audio_location = 2;
+        } else if (!strcmp(match[3].str().c_str(), "S")) {
+            audio_location = 3;  //Support L|R interleaved ie stereo config
         }
 
-        if ((stream_id > 1) || (direction > 1) || (audio_location > 2)) {
+        if ((stream_id > 1) || (direction > 1) || (audio_location > 3)) {
             PAL_ERR(LOG_TAG, "invalid stream info (%d, %d, %d)", stream_id, direction, audio_location);
             continue;
         }
@@ -2183,6 +2187,12 @@ void BtSco::convertCodecInfo(audio_lc3_codec_cfg_t &lc3CodecInfo,
         lc3CodecInfo.enc_cfg.streamMapOut[idx].audio_location = it.audio_location;
         lc3CodecInfo.enc_cfg.streamMapOut[idx].stream_id = it.stream_id;
         lc3CodecInfo.enc_cfg.streamMapOut[idx++].direction = it.direction;
+        /* Stereo config requires max_octets_per_frame to be twice the value for ToAir enc config */
+        if (lc3CodecInfo.enc_cfg.streamMapOut[idx].audio_location == 3) {
+            lc3CodecInfo.enc_cfg.toAirConfig.max_octets_per_frame *= 2;
+            PAL_DBG(LOG_TAG, "streamMapOut: toAirConfig.max_octets_per_frame = %d\n",
+                lc3CodecInfo.enc_cfg.toAirConfig.max_octets_per_frame );
+        }
         PAL_DBG(LOG_TAG, "streamMapOut: audio_location %d, stream_id %d, direction %d",
                 it.audio_location, it.stream_id, it.direction);
     }
@@ -2196,6 +2206,8 @@ void BtSco::convertCodecInfo(audio_lc3_codec_cfg_t &lc3CodecInfo,
         lc3CodecInfo.dec_cfg.streamMapIn[idx].audio_location = it.audio_location;
         lc3CodecInfo.dec_cfg.streamMapIn[idx].stream_id = it.stream_id;
         lc3CodecInfo.dec_cfg.streamMapIn[idx++].direction = it.direction;
+        PAL_DBG(LOG_TAG, "streamMapIn: fromAirConfig.max_octets_per_frame = %d\n",
+                lc3CodecInfo.dec_cfg.fromAirConfig.max_octets_per_frame );
         PAL_DBG(LOG_TAG, "steamMapIn: audio_location %d, stream_id %d, direction %d",
                 it.audio_location, it.stream_id, it.direction);
     }

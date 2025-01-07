@@ -584,7 +584,7 @@ public:
     /* Variable to store which speaker side is being used for call audio.
      * Valid for Stereo case only
      */
-    static bool isMainSpeakerRight;
+    static int monoSpeakerPosition;
     /* Variable to store Quick calibration time for Speaker protection */
     static int spQuickCalTime;
     /* Variable to store the mode request for Speaker protection */

@@ -3122,7 +3122,7 @@ exit:
 }
 
 int PayloadBuilder::populateCalKeyVector(Stream *s, std::vector <std::pair<int,int>> &ckv, int tag) {
-    int status = 0;
+    int status = 0, spkViMap, spkDevMap;
     PAL_VERBOSE(LOG_TAG,"enter \n");
     std::vector <std::pair<int,int>> keyVector;
     struct pal_stream_attributes sAttr;
@@ -3268,7 +3268,9 @@ int PayloadBuilder::populateCalKeyVector(Stream *s, std::vector <std::pair<int,i
                 }
                 else {
                     PAL_DBG(LOG_TAG, "Mono channel speaker");
-                    ckv.push_back(std::make_pair(SPK_PRO_DEV_MAP, RIGHT_MONO));
+                    spkDevMap = ResourceManager::monoSpeakerPosition == SPKR_LEFT
+                                                        ? LEFT_MONO : RIGHT_MONO;
+                    ckv.push_back(std::make_pair(SPK_PRO_DEV_MAP, spkDevMap));
                 }
                 break;
             }
@@ -3294,7 +3296,9 @@ int PayloadBuilder::populateCalKeyVector(Stream *s, std::vector <std::pair<int,i
                 }
                 else {
                     PAL_DBG(LOG_TAG, "Mono channel speaker");
-                    ckv.push_back(std::make_pair(SPK_PRO_VI_MAP, RIGHT_SPKR));
+                    spkViMap = ResourceManager::monoSpeakerPosition == SPKR_LEFT
+                                                        ? LEFT_SPKR : RIGHT_SPKR;
+                    ckv.push_back(std::make_pair(SPK_PRO_VI_MAP, spkViMap));
                 }
                 break;
             }
