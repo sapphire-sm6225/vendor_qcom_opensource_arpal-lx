@@ -257,7 +257,7 @@ should always be in sync with it -->
         </in-device>
         <in-device>
             <id>PAL_DEVICE_IN_WIRED_HEADSET</id>
-            <back_end_name>CODEC_DMA-LPAIF_RXTX-TX-3</back_end_name>
+            <back_end_name>CODEC_DMA-LPAIF_RXTX-TX-4</back_end_name>
             <max_channels>2</max_channels>
             <channels>1</channels>
             <snd_device_name>headset-mic</snd_device_name>

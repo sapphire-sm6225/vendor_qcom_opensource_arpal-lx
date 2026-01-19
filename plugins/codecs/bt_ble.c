@@ -25,6 +25,10 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #define LOG_TAG "PAL: bt_ble"
@@ -65,14 +69,14 @@ static int ble_pack_enc_config(bt_codec_t *codec, void *src, void **dst)
     enc_payload->sample_rate    = ble_bt_cfg->enc_cfg.toAirConfig.sampling_freq;
     enc_payload->num_blks       = num_blks;
     if (ble_bt_cfg->enc_cfg.stream_map_size) {
-        if (!ble_bt_cfg->enc_cfg.streamMapOut[0].audio_location)
+        if (1 == ble_bt_cfg->enc_cfg.stream_map_size)
             enc_payload->channel_count = CH_MONO;
         else
             enc_payload->channel_count = CH_STEREO;
     }
 
     enc_payload->is_abr_enabled    = true;
-    enc_payload->is_enc_config_set = true;
+    enc_payload->is_enc_config_set = ble_bt_cfg->is_enc_config_set;
     enc_payload->is_dec_config_set = ble_bt_cfg->is_dec_config_set;
 
     for (i = 0; i < num_blks; i++) {
@@ -166,7 +170,7 @@ static int ble_pack_dec_config(bt_codec_t *codec, void *src, void **dst)
     enc_payload->num_blks          = num_blks;
     enc_payload->is_abr_enabled    = true;
     enc_payload->is_enc_config_set = ble_bt_cfg->is_enc_config_set;
-    enc_payload->is_dec_config_set = true;
+    enc_payload->is_dec_config_set = ble_bt_cfg->is_dec_config_set;
 
     for (i = 0; i < num_blks; i++) {
         blk[i] = (custom_block_t *)calloc(1, sizeof(custom_block_t));

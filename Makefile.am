@@ -193,7 +193,9 @@ pal_sources = ${top_srcdir}/stream/src/Stream.cpp \
               ${top_srcdir}/session/src/ACDEngine.cpp \
               ${top_srcdir}/utils/src/SoundTriggerXmlParser.cpp \
               ${top_srcdir}/utils/src/ACDPlatformInfo.cpp \
-              ${top_srcdir}/device/src/HeadsetVaMic.cpp
+              ${top_srcdir}/device/src/HeadsetVaMic.cpp \
+              ${top_srcdir}/stream/src/StreamACDB.cpp \
+              ${top_srcdir}/utils/src/SignalHandler.cpp
 
 acl_sources = ${top_srcdir}/utils/src/ChargerListener.cpp
 

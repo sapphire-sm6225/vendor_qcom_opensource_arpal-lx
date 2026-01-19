@@ -27,7 +27,7 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -2008,10 +2008,10 @@ int SessionAlsaUtils::disconnectSessionDevice(Stream* streamHandle, pal_stream_t
                 sub = 1;
             else
                 sub = 2;
-            if (dAttr.id >= PAL_DEVICE_OUT_HANDSET && dAttr.id <= PAL_DEVICE_OUT_HEARING_AID) {
+            if (dAttr.id > PAL_DEVICE_OUT_MIN && dAttr.id < PAL_DEVICE_OUT_MAX) {
                 feName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "p";
                 disconnectCtrlName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "p" << " disconnect";
-            } else if (dAttr.id >= PAL_DEVICE_IN_HANDSET_MIC && dAttr.id <= PAL_DEVICE_IN_PROXY) {
+            } else if (dAttr.id > PAL_DEVICE_IN_MIN && dAttr.id < PAL_DEVICE_IN_MAX) {
                 feName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "c";
                 disconnectCtrlName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "c" << " disconnect";
             }
@@ -2172,9 +2172,9 @@ int SessionAlsaUtils::connectSessionDevice(Session* sess, Stream* streamHandle, 
             else
                 sub = 2;
 
-            if (dAttr.id >= PAL_DEVICE_OUT_HANDSET && dAttr.id <= PAL_DEVICE_OUT_HEARING_AID) {
+            if (dAttr.id > PAL_DEVICE_OUT_MIN && dAttr.id < PAL_DEVICE_OUT_MAX) {
                 connectCtrlName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "p" << " connect";
-            } else if (dAttr.id >= PAL_DEVICE_IN_HANDSET_MIC && dAttr.id <= PAL_DEVICE_IN_PROXY) {
+            } else if (dAttr.id > PAL_DEVICE_IN_MIN && dAttr.id < PAL_DEVICE_IN_MAX) {
                 connectCtrlName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "c" << " connect";
             }
             break;
@@ -2527,11 +2527,11 @@ int SessionAlsaUtils::setupSessionDevice(Stream* streamHandle, pal_stream_type_t
             else
                 sub = 2;
 
-            if (dAttr.id >= PAL_DEVICE_OUT_HANDSET && dAttr.id <= PAL_DEVICE_OUT_HEARING_AID) {
+            if (dAttr.id > PAL_DEVICE_OUT_MIN && dAttr.id < PAL_DEVICE_OUT_MAX) {
                 cntrlName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "p" << " control";
                 aifMdName << aifBackEndsToConnect[0].second.data() << " metadata";
                 feMdName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "p" << " metadata";
-            } else if (dAttr.id >= PAL_DEVICE_IN_HANDSET_MIC && dAttr.id <= PAL_DEVICE_IN_PROXY) {
+            } else if (dAttr.id > PAL_DEVICE_IN_MIN && dAttr.id < PAL_DEVICE_IN_MAX) {
                 cntrlName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "c" << " control";
                 aifMdName << aifBackEndsToConnect[0].second.data() << " metadata";
                 feMdName << PCM_SND_VOICE_DEV_NAME_PREFIX << sub << "c" << " metadata";
