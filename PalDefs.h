@@ -26,9 +26,10 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
- * Copyright (c) 2022, 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
+
  */
 
 /** \file pal_defs.h
@@ -57,6 +58,7 @@ extern "C" {
 #define MIXER_PATH_MAX_LENGTH 100
 #define PAL_MAX_CHANNELS_SUPPORTED 64
 #define MAX_KEYWORD_SUPPORTED 8
+#define PAL_VERSION "1.0"
 
 /** Audio stream handle */
 typedef uint64_t pal_stream_handle_t;
@@ -752,7 +754,7 @@ enum {
 /** metadata flags, can be OR'able */
 typedef uint32_t pal_meta_data_flags_t;
 
-typedef struct pal_extern_alloc_buff_info{
+typedef struct pal_extern_alloc_buff_info {
     int      alloc_handle;/**< unique memory handle identifying extern mem allocation */
     uint32_t alloc_size;  /**< size of external allocation */
     uint32_t offset;      /**< offset of buffer within extern allocation */
@@ -760,7 +762,7 @@ typedef struct pal_extern_alloc_buff_info{
 
 /** PAL buffer structure used for reading/writing buffers from/to the stream */
 struct pal_buffer {
-    uint8_t *buffer;                  /**<  buffer pointer */
+    uint8_t *buffer;               /**<  buffer pointer */
     size_t size;                   /**< number of bytes */
     size_t offset;                 /**< offset in buffer from where valid byte starts */
     struct timespec *ts;           /**< timestmap */
@@ -768,6 +770,22 @@ struct pal_buffer {
     size_t metadata_size;          /**< size of metadata buffer in bytes */
     uint8_t *metadata;             /**< metadata buffer. Can contain multiple metadata*/
     pal_extern_alloc_buff_info_t alloc_info; /**< holds info for extern buff */
+    uint64_t frame_index;          /**< frame index of the buffer */
+};
+
+struct pal_clbk_buffer_info {
+    uint64_t frame_index;       /**< frame index of the buffer */
+    uint32_t sample_rate;       /**< updated sample rate */
+    uint32_t bit_width;         /**< updated bit width */
+    uint16_t channel_count;     /**< updated channel count */
+};
+
+struct pal_callback_buffer {
+    uint8_t *buffer;               /**<  buffer pointer */
+    size_t size;                   /**< filled length of the buffer */
+    struct timespec *ts;           /**< timestamp */
+    uint32_t status;               /**< status of callback payload */
+    struct pal_clbk_buffer_info cb_buf_info;   /**< callback buffer info */
 };
 
 /** pal_mmap_buffer flags */
@@ -1182,10 +1200,12 @@ typedef enum {
 } pal_ultrasound_gain_t;
 
 /**< PAL device */
+#define DEVICE_NAME_MAX_SIZE 128
 struct pal_device {
     pal_device_id_t id;                     /**<  device id */
     struct pal_media_config config;         /**<  media config of the device */
     struct pal_usb_device_address address;
+    char sndDevName[DEVICE_NAME_MAX_SIZE];
     pal_device_custom_config_t custom_config;        /**<  Optional */
 };
 
@@ -1472,8 +1492,12 @@ typedef int32_t (*pal_global_callback)(uint32_t event_id, uint32_t *event_data, 
 typedef enum card_status_t {
     CARD_STATUS_OFFLINE = 0,
     CARD_STATUS_ONLINE,
+    CARD_STATUS_STANDBY,
     CARD_STATUS_NONE,
 } card_status_t;
+
+#define PAL_CARD_STATUS_DOWN(n)     (n == CARD_STATUS_OFFLINE || n == CARD_STATUS_STANDBY)
+#define PAL_CARD_STATUS_UP(n)       (n == CARD_STATUS_ONLINE)
 
 typedef struct pal_buffer_config {
     size_t buf_count; /**< number of buffers*/

@@ -26,8 +26,8 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -60,6 +60,8 @@
 #include "ECRefDevice.h"
 #endif
 #define MAX_CHANNEL_SUPPORTED 2
+#define DEFAULT_OUTPUT_SAMPLING_RATE 48000
+#define DEFAULT_OUTPUT_CHANNEL 2
 
 std::shared_ptr<Device> Device::getInstance(struct pal_device *device,
                                                  std::shared_ptr<ResourceManager> Rm)
@@ -278,8 +280,10 @@ Device::~Device()
     PAL_DBG(LOG_TAG,"device instance for id %d destroyed", deviceAttr.id);
 }
 
-int Device::getDeviceAttributes(struct pal_device *dattr)
+int Device::getDeviceAttributes(struct pal_device *dattr, Stream* streamHandle)
 {
+    struct pal_device *strDevAttr;
+
     if (!dattr) {
         PAL_ERR(LOG_TAG, "Invalid device attributes");
         return  -EINVAL;
@@ -287,6 +291,27 @@ int Device::getDeviceAttributes(struct pal_device *dattr)
 
     ar_mem_cpy(dattr, sizeof(struct pal_device),
             &deviceAttr, sizeof(struct pal_device));
+
+    /* overwrite custom key if stream is specified */
+    mDeviceMutex.lock();
+    if (streamHandle != NULL) {
+        if (mStreamDevAttr.empty()) {
+            PAL_ERR(LOG_TAG,"empty device attr for device %d", getSndDeviceId());
+            mDeviceMutex.unlock();
+            return 0;
+        }
+        for (auto it = mStreamDevAttr.begin(); it != mStreamDevAttr.end(); ++it) {
+            Stream* curStream = (*it).second.first;
+            if (curStream == streamHandle) {
+                PAL_DBG(LOG_TAG,"found entry for stream: %pK", streamHandle);
+                strDevAttr = (*it).second.second;
+                strlcpy(dattr->custom_config.custom_key, strDevAttr->custom_config.custom_key,
+                        PAL_MAX_CUSTOM_KEY_SIZE);
+                break;
+            }
+        }
+    }
+    mDeviceMutex.unlock();
 
     return 0;
 }
@@ -354,6 +379,13 @@ void Device::getCurrentSndDevName(char *name){
     strlcpy(name, mSndDeviceName, DEVICE_NAME_MAX_SIZE);
 }
 
+int Device::getDeviceCount(){
+    mDeviceMutex.lock();
+    int devCount = deviceCount;
+    mDeviceMutex.unlock();
+    return devCount;
+}
+
 std::string Device::getPALDeviceName()
 {
     PAL_VERBOSE(LOG_TAG, "Device name %s acquired", mPALDeviceName.c_str());
@@ -368,6 +400,51 @@ int Device::init(pal_param_device_connection_t device_conn __unused)
 int Device::deinit(pal_param_device_connection_t device_conn __unused)
 {
     return 0;
+}
+
+int Device::updateCustomAnalogMicControls()
+{
+    int ret = 0;
+    struct mixer *mixerHdl = NULL;
+    struct mixer_ctl *adc1_switch_ctl = NULL;
+    struct mixer_ctl *adc1_chmap_ctl = NULL;
+
+    PAL_DBG(LOG_TAG, "Entered %s ", __func__);
+    ret = rm->getHwAudioMixer(&mixerHdl);
+    if (ret) {
+        PAL_ERR(LOG_TAG, "getHwAudioMixer() failed %d", ret);
+        goto exit;
+    }
+
+    adc1_chmap_ctl = mixer_get_ctl_by_name(mixerHdl, "ADC1 ChMap");
+    adc1_switch_ctl = mixer_get_ctl_by_name(mixerHdl, "ADC1_MIXER Switch");
+    if (!adc1_chmap_ctl || !adc1_switch_ctl) {
+        PAL_ERR(LOG_TAG, " ADC1  mixer control not identified" );
+        goto exit;
+    }
+
+    PAL_VERBOSE(LOG_TAG, "Setting ADC1 ChMap: SWRM_TX1_CH1 ");
+    ret = mixer_ctl_set_enum_by_string(adc1_chmap_ctl, "SWRM_TX1_CH1");
+    if (ret)
+        PAL_ERR(LOG_TAG, "Failed to set enum SWRM_TX1_CH1 : %d", ret);
+
+    PAL_VERBOSE(LOG_TAG, "Setting ADC1_MIXER Switch: 1 ");
+    ret = mixer_ctl_set_value(adc1_switch_ctl, 0, 1);
+    if (ret)
+        PAL_ERR(LOG_TAG, "Failed to set ADC1_Mixer Switch to 1: %d", ret);
+
+    PAL_VERBOSE(LOG_TAG, "Setting ADC1 ChMap: ZERO ");
+    ret = mixer_ctl_set_enum_by_string(adc1_chmap_ctl, "ZERO");
+    if (ret)
+        PAL_ERR(LOG_TAG, "Error: Invalid enum value to ZERO : %d", ret);
+
+    PAL_VERBOSE(LOG_TAG, "Setting ADC1_MIXER Switch: 0 ");
+    ret = mixer_ctl_set_value(adc1_switch_ctl, 0, 0);
+    if (ret)
+        PAL_ERR(LOG_TAG, "Failed to set ADC1_Mixer Switch to 0: %d", ret);
+
+exit:
+    return ret;
 }
 
 int Device::open()
@@ -405,6 +482,11 @@ int Device::open()
         if (0 != status) {
             PAL_ERR(LOG_TAG, "Failed to obtain the device name from ResourceManager status %d", status);
             goto exit;
+        }
+        if (PAL_DEVICE_IN_HANDSET_MIC == this->deviceAttr.id &&
+                                !strcmp(mSndDeviceName, "handset-amic")) {
+            PAL_DBG(LOG_TAG, "amic1 capture enabled ");
+            updateCustomAnalogMicControls();
         }
         enableDevice(audioRoute, mSndDeviceName);
     }
@@ -471,7 +553,29 @@ int Device::start_l()
             status = -EINVAL;
             goto exit;
         }
-
+        if (rm->isPluginPlaybackDevice(this->deviceAttr.id)) {
+            /* avoid setting invalid device attribute and the failure of starting device
+             * when plugin device disconnects. Audio Policy Manager will go on finishing device switch.
+             */
+            if (this->deviceAttr.config.sample_rate == 0) {
+                PAL_DBG(LOG_TAG, "overwrite samplerate to default value");
+                this->deviceAttr.config.sample_rate = DEFAULT_OUTPUT_SAMPLING_RATE;
+            }
+            if (this->deviceAttr.config.bit_width == 0) {
+                PAL_DBG(LOG_TAG, "overwrite bit width to default value");
+                this->deviceAttr.config.bit_width = 16;
+            }
+            if (this->deviceAttr.config.ch_info.channels == 0) {
+                PAL_DBG(LOG_TAG, "overwrite channel to default value");
+                this->deviceAttr.config.ch_info.channels = DEFAULT_OUTPUT_CHANNEL;
+                this->deviceAttr.config.ch_info.ch_map[0] = PAL_CHMAP_CHANNEL_FL;
+                this->deviceAttr.config.ch_info.ch_map[1] = PAL_CHMAP_CHANNEL_FR;
+            }
+            if (this->deviceAttr.config.aud_fmt_id == 0) {
+                PAL_DBG(LOG_TAG, "overwrite aud_fmt_id to default value");
+                this->deviceAttr.config.aud_fmt_id = PAL_AUDIO_FMT_PCM_S16_LE;
+            }
+        }
         SessionAlsaUtils::setDeviceMediaConfig(rm, backEndName, &(this->deviceAttr));
 
         if (customPayloadSize) {
@@ -567,4 +671,302 @@ int32_t Device::configureDeviceClockSrc(char const *mixerStrClockSrc, const uint
 
 exit:
     return ret;
+}
+
+/* insert inDevAttr if incoming device has higher priority */
+bool Device::compareStreamDevAttr(const struct pal_device *inDevAttr,
+                            const struct pal_device_info *inDevInfo,
+                            struct pal_device *curDevAttr,
+                            const struct pal_device_info *curDevInfo)
+{
+    bool insert = false;
+
+    if (!inDevAttr || !inDevInfo || !curDevAttr || !curDevInfo) {
+        PAL_ERR(LOG_TAG, "invalid pointer cannot update attr");
+        goto exit;
+    }
+
+     /* check snd device name */
+    if (inDevInfo->sndDevName_overwrite && !curDevInfo->sndDevName_overwrite) {
+        PAL_DBG(LOG_TAG, "snd overwrite found");
+        insert = true;
+        goto exit;
+    }
+
+
+    /* check channels */
+    if (inDevInfo->channels_overwrite && !curDevInfo->channels_overwrite) {
+        PAL_DBG(LOG_TAG, "ch overwrite found");
+        insert = true;
+        goto exit;
+    } else if ((inDevInfo->channels_overwrite && curDevInfo->channels_overwrite) ||
+               (!inDevInfo->channels_overwrite && !curDevInfo->channels_overwrite)) {
+        if (inDevAttr->config.ch_info.channels > curDevAttr->config.ch_info.channels) {
+            PAL_DBG(LOG_TAG, "incoming dev has higher ch count, in ch: %d, cur ch: %d",
+                            inDevAttr->config.ch_info.channels, curDevAttr->config.ch_info.channels);
+            insert = true;
+            goto exit;
+        }
+    }
+
+    /* check sample rate */
+    if (inDevInfo->samplerate_overwrite && !curDevInfo->samplerate_overwrite) {
+        PAL_DBG(LOG_TAG, "sample rate overwrite found");
+        insert = true;
+        goto exit;
+    } else if ((inDevInfo->samplerate_overwrite && curDevInfo->samplerate_overwrite) &&
+               (inDevAttr->config.sample_rate > curDevAttr->config.sample_rate)) {
+        PAL_DBG(LOG_TAG, "both have sr overwrite set, incoming dev has higher sr: %d, cur sr: %d",
+                        inDevAttr->config.sample_rate, curDevAttr->config.sample_rate);
+        insert = true;
+        goto exit;
+    } else if (!inDevInfo->samplerate_overwrite && !curDevInfo->samplerate_overwrite) {
+        if ((inDevAttr->config.sample_rate % SAMPLINGRATE_44K == 0) &&
+            (curDevAttr->config.sample_rate % SAMPLINGRATE_44K != 0)) {
+            PAL_DBG(LOG_TAG, "incoming sample rate is 44.1K");
+            insert = true;
+            goto exit;
+        } else if (inDevAttr->config.sample_rate > curDevAttr->config.sample_rate) {
+            PAL_DBG(LOG_TAG, "incoming dev has higher sr: %d, cur sr: %d",
+                            inDevAttr->config.sample_rate, curDevAttr->config.sample_rate);
+            insert = true;
+            goto exit;
+        }
+    }
+
+    /* check streams bit width */
+    if (inDevInfo->bit_width_overwrite && !curDevInfo->bit_width_overwrite) {
+        if (isPalPCMFormat(inDevAttr->config.aud_fmt_id)) {
+            PAL_DBG(LOG_TAG, "bit width overwrite found");
+            insert = true;
+            goto exit;
+        }
+    } else if ((inDevInfo->bit_width_overwrite && curDevInfo->bit_width_overwrite) ||
+               (!inDevInfo->bit_width_overwrite && !curDevInfo->bit_width_overwrite)) {
+        if (isPalPCMFormat(inDevAttr->config.aud_fmt_id) &&
+            (inDevAttr->config.bit_width > curDevAttr->config.bit_width)) {
+            PAL_DBG(LOG_TAG, "incoming dev has higher bw: %d, cur bw: %d",
+                            inDevAttr->config.bit_width, curDevAttr->config.bit_width);
+            insert = true;
+            goto exit;
+        }
+    }
+
+exit:
+    return insert;
+}
+
+int Device::insertStreamDeviceAttr(struct pal_device *inDevAttr,
+                                 Stream* streamHandle)
+{
+    pal_device_info inDevInfo, curDevInfo;
+    struct pal_device *curDevAttr, *newDevAttr;
+    std::string key = "";
+    pal_stream_attributes strAttr;
+
+    if (!streamHandle) {
+        PAL_ERR(LOG_TAG, "invalid stream handle");
+        return -EINVAL;
+    }
+    if (!inDevAttr) {
+        PAL_ERR(LOG_TAG, "invalid dev cannot get device attr");
+        return -EINVAL;
+    }
+
+    streamHandle->getStreamAttributes(&strAttr);
+
+    newDevAttr = (struct pal_device *) calloc(1, sizeof(struct pal_device));
+    if (!newDevAttr) {
+        PAL_ERR(LOG_TAG, "failed to allocate memory for pal device");
+        return -ENOMEM;
+    }
+
+    key = inDevAttr->custom_config.custom_key;
+
+    /* get the incoming stream dev info */
+    rm->getDeviceInfo(inDevAttr->id, strAttr.type, key, &inDevInfo);
+
+    ar_mem_cpy(newDevAttr, sizeof(struct pal_device), inDevAttr,
+                 sizeof(struct pal_device));
+
+    mDeviceMutex.lock();
+    if (mStreamDevAttr.empty()) {
+        mStreamDevAttr.insert(std::make_pair(inDevInfo.priority, std::make_pair(streamHandle, newDevAttr)));
+        PAL_DBG(LOG_TAG, "insert the first device attribute");
+        goto exit;
+    }
+
+    /*
+     * this map is sorted with stream priority, and the top one will always
+     * be with highest stream priority.
+     * <priority(it.first):<stream_attr(it.second.first):pal_device(it.second.second)>>
+     * If stream priority is the same, new attributes will be inserted to the map with:
+     *   1. device attr with snd name overwrite flag set
+     *   2. device attr with channel overwrite set, or a higher channel count
+     *   3. device attr with sample rate overwrite set, or a higher sampling rate
+     *   4. device attr with bit depth overwrite set, or a higher bit depth
+     */
+    for (auto it = mStreamDevAttr.begin(); ; it++) {
+        /* get the current stream dev info to be compared with incoming device */
+        struct pal_stream_attributes curStrAttr;
+        if (it != mStreamDevAttr.end()) {
+            (*it).second.first->getStreamAttributes(&curStrAttr);
+            curDevAttr = (*it).second.second;
+            rm->getDeviceInfo(curDevAttr->id, curStrAttr.type,
+                            curDevAttr->custom_config.custom_key, &curDevInfo);
+        }
+
+        if (it == mStreamDevAttr.end()) {
+            /* if reaches to the end, then the new dev attr will be inserted to the end */
+            PAL_DBG(LOG_TAG, "incoming stream: %d has lowest priority, insert to the end", strAttr.type);
+            mStreamDevAttr.insert(std::make_pair(inDevInfo.priority, std::make_pair(streamHandle, newDevAttr)));
+            break;
+        } else if (inDevInfo.priority < (*it).first) {
+            /* insert if incoming stream has higher priority than current */
+            mStreamDevAttr.insert(it, std::make_pair(inDevInfo.priority, std::make_pair(streamHandle, newDevAttr)));
+            break;
+        } else if (inDevInfo.priority == (*it).first) {
+            /* if stream priority is the same, check attributes priority */
+            if (compareStreamDevAttr(inDevAttr, &inDevInfo, curDevAttr, &curDevInfo)) {
+                PAL_DBG(LOG_TAG, "incoming stream: %d has higher priority than cur stream %d",
+                                strAttr.type, curStrAttr.type);
+                mStreamDevAttr.insert(it, std::make_pair(inDevInfo.priority, std::make_pair(streamHandle, newDevAttr)));
+                break;
+            }
+        }
+    }
+
+exit:
+    PAL_DBG(LOG_TAG, "dev: %d attr inserted are: priority: 0x%x, stream type: %d, ch: %d,"
+                     " sr: %d, bit_width: %d, fmt: %d, sndDev: %s, custom_key: %s",
+                    getSndDeviceId(), inDevInfo.priority, strAttr.type,
+                    newDevAttr->config.ch_info.channels,
+                    newDevAttr->config.sample_rate,
+                    newDevAttr->config.bit_width,
+                    newDevAttr->config.aud_fmt_id,
+                    newDevAttr->sndDevName,
+                    newDevAttr->custom_config.custom_key);
+
+#if DUMP_DEV_ATTR
+    PAL_DBG(LOG_TAG, "======dump StreamDevAttr Inserted dev: %d ======", getSndDeviceId());
+    int i = 0;
+    for (auto it = mStreamDevAttr.begin(); it != mStreamDevAttr.end(); it++) {
+        pal_stream_attributes dumpstrAttr;
+        uint32_t dumpPriority = (*it).first;
+        (*it).second.first->getStreamAttributes(&dumpstrAttr);
+        struct pal_device *dumpDevAttr = (*it).second.second;
+        PAL_DBG(LOG_TAG, "entry: %d", i);
+        PAL_DBG(LOG_TAG, "str pri: 0x%x, str type: %d, ch %d, sr %d, bit_width %d,"
+                         " fmt %d, sndDev: %s, custom_key: %s",
+                         dumpPriority, dumpstrAttr.type,
+                         dumpDevAttr->config.ch_info.channels,
+                         dumpDevAttr->config.sample_rate,
+                         dumpDevAttr->config.bit_width,
+                         dumpDevAttr->config.aud_fmt_id,
+                         dumpDevAttr->sndDevName,
+                         dumpDevAttr->custom_config.custom_key);
+        i++;
+    }
+#endif
+
+    mDeviceMutex.unlock();
+    return 0;
+}
+
+void Device::removeStreamDeviceAttr(Stream* streamHandle)
+{
+    mDeviceMutex.lock();
+    if (mStreamDevAttr.empty()) {
+        PAL_ERR(LOG_TAG, "empty device attr for device %d", getSndDeviceId());
+        mDeviceMutex.unlock();
+        return;
+    }
+
+    for (auto it = mStreamDevAttr.begin(); it != mStreamDevAttr.end(); it++) {
+        Stream* curStream = (*it).second.first;
+        if (curStream == streamHandle) {
+            uint32_t priority = (*it).first;
+            pal_stream_attributes strAttr;
+            (*it).second.first->getStreamAttributes(&strAttr);
+            pal_device *devAttr = (*it).second.second;
+            PAL_DBG(LOG_TAG, "found entry for stream:%d", strAttr.type);
+            PAL_DBG(LOG_TAG, "dev: %d attr removed are: priority: 0x%x, stream type: %d, ch: %d,"
+                             " sr: %d, bit_width: %d, fmt: %d, sndDev: %s, custom_key: %s",
+                            getSndDeviceId(), priority, strAttr.type,
+                            devAttr->config.ch_info.channels,
+                            devAttr->config.sample_rate,
+                            devAttr->config.bit_width,
+                            devAttr->config.aud_fmt_id,
+                            devAttr->sndDevName,
+                            devAttr->custom_config.custom_key);
+            free((*it).second.second);
+            mStreamDevAttr.erase(it);
+            break;
+        }
+    }
+
+#if DUMP_DEV_ATTR
+    PAL_DBG(LOG_TAG, "=====dump StreamDevAttr after removing dev: %d ======", getSndDeviceId());
+    int i = 0;
+    for (auto it = mStreamDevAttr.begin(); it != mStreamDevAttr.end(); it++) {
+        pal_stream_attributes dumpstrAttr;
+        uint32_t dumpPriority = (*it).first;
+        (*it).second.first->getStreamAttributes(&dumpstrAttr);
+        struct pal_device *dumpDevAttr = (*it).second.second;
+        PAL_DBG(LOG_TAG, "entry: %d", i);
+        PAL_DBG(LOG_TAG, "str pri: 0x%x, str type: %d, ch %d, sr %d, bit_width %d,"
+                         " fmt %d, sndDev: %s, custom_key: %s",
+                         dumpPriority, dumpstrAttr.type,
+                         dumpDevAttr->config.ch_info.channels,
+                         dumpDevAttr->config.sample_rate,
+                         dumpDevAttr->config.bit_width,
+                         dumpDevAttr->config.aud_fmt_id,
+                         dumpDevAttr->sndDevName,
+                         dumpDevAttr->custom_config.custom_key);
+        i++;
+    }
+#endif
+    mDeviceMutex.unlock();
+}
+
+int Device::getTopPriorityDeviceAttr(struct pal_device *deviceAttr, uint32_t *streamPrio)
+{
+    mDeviceMutex.lock();
+    if (mStreamDevAttr.empty()) {
+        PAL_ERR(LOG_TAG, "empty device attr for device %d", getSndDeviceId());
+        mDeviceMutex.unlock();
+        return -EINVAL;
+    }
+
+    auto it = mStreamDevAttr.begin();
+    *streamPrio = (*it).first;
+    ar_mem_cpy(deviceAttr, sizeof(struct pal_device),
+            (*it).second.second, sizeof(struct pal_device));
+    /* update snd dev name */
+    std::string sndDevName(deviceAttr->sndDevName);
+    rm->updateSndName(deviceAttr->id, sndDevName);
+    /* update sample rate if it's valid */
+    if (mSampleRate)
+        deviceAttr->config.sample_rate = mSampleRate;
+    if (mBitWidth) {
+        deviceAttr->config.bit_width = mBitWidth;
+        deviceAttr->config.aud_fmt_id = rm->getAudioFmt(mBitWidth);
+    }
+#if DUMP_DEV_ATTR
+    pal_stream_attributes dumpstrAttr;
+    (*it).second.first->getStreamAttributes(&dumpstrAttr);
+    PAL_DBG(LOG_TAG, "======dump StreamDevAttr Retrieved dev: %d ======", getSndDeviceId());
+    PAL_DBG(LOG_TAG, "str pri: 0x%x, str type: %d, ch %d, sr %d, bit_width %d,"
+                     " fmt %d, sndDev: %s, custom_key: %s",
+                     (*it).first, dumpstrAttr.type,
+                     deviceAttr->config.ch_info.channels,
+                     deviceAttr->config.sample_rate,
+                     deviceAttr->config.bit_width,
+                     deviceAttr->config.aud_fmt_id,
+                     deviceAttr->sndDevName,
+                     deviceAttr->custom_config.custom_key);
+#endif
+
+    mDeviceMutex.unlock();
+    return 0;
 }

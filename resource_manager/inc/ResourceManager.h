@@ -26,8 +26,8 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -563,8 +563,6 @@ public:
     static bool mixerClosed;
     enum card_status_t cardState;
     bool ssrStarted = false;
-    /* Variable to cache a2dp suspended state for a2dp device */
-    static bool a2dp_suspended;
     //Variable to check if multiple sampe rate during combo device supported
     bool is_multiple_sample_rate_combo_supported = true;
     /* Variable to store whether Speaker protection is enabled or not */
@@ -863,6 +861,7 @@ public:
     bool isDeviceReady(pal_device_id_t id);
     static bool isBtScoDevice(pal_device_id_t id);
     static bool isBtDevice(pal_device_id_t id);
+    static bool isBtA2dpDevice(pal_device_id_t id);
     int32_t a2dpSuspend(pal_device_id_t dev_id);
     int32_t a2dpResume(pal_device_id_t dev_id);
     int32_t a2dpCaptureSuspend(pal_device_id_t dev_id);
@@ -884,6 +883,8 @@ public:
     void unlockResourceManagerMutex() {mResourceManagerMutex.unlock();};
     void getSharedBEActiveStreamDevs(std::vector <std::tuple<Stream *, uint32_t>> &activeStreamDevs,
                                      int dev_id);
+    bool compareSharedBEStreamDevAttr(std::vector <std::tuple<Stream *, uint32_t>> &sharedBEStreamDev,
+                                     pal_device *newDevAttr, bool enable);
     int32_t streamDevSwitch(std::vector <std::tuple<Stream *, uint32_t>> streamDevDisconnectList,
                             std::vector <std::tuple<Stream *, struct pal_device *>> streamDevConnectList);
     char* getDeviceNameFromID(uint32_t id);
@@ -905,16 +906,7 @@ public:
     void getVendorConfigPath(char* config_file_path, int path_size);
     void restoreDevice(std::shared_ptr<Device> dev);
     bool doDevAttrDiffer(struct pal_device *inDevAttr,
-                         const char *CurrentSndDeviceName,
                          struct pal_device *curDevAttr);
-    int updatePriorityAttr(pal_device_id_t dev_id,
-                           std::vector <std::tuple<Stream *, uint32_t>> activestreams,
-                           struct pal_device *incomingDev,
-                           const pal_stream_attributes* currentStrAttr);
-    bool compareAndUpdateDevAttr(const struct pal_device *Dev1Attr,
-                                 const struct pal_device_info *Dev1Info,
-                                 struct pal_device *Dev2Attr,
-                                 const struct pal_device_info *Dev2Info);
     int32_t voteSleepMonitor(Stream *str, bool vote, bool force_nlpi_vote = false);
     bool checkAndUpdateDeferSwitchState(bool stream_active);
     static uint32_t palFormatToBitwidthLookup(const pal_audio_fmt_t format);

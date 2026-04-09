@@ -25,11 +25,16 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifndef DEVICE_H
 #define DEVICE_H
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <memory>
 #include "PalApi.h"
@@ -40,7 +45,9 @@
 #include "PalAudioRoute.h"
 
 #define DEVICE_NAME_MAX_SIZE 128
+#define DUMP_DEV_ATTR 0
 
+class Stream;
 class ResourceManager;
 
 class Device
@@ -60,6 +67,10 @@ protected:
     size_t customPayloadSize;
     std::string UpdatedSndName;
     uint32_t mCurrentPriority;
+    //device atrributues per stream are stored by priority in a map
+    std::multimap<uint32_t, std::pair<Stream *, struct pal_device *>> mStreamDevAttr;
+    uint32_t mSampleRate = 0;
+    uint32_t mBitWidth = 0;
 
     Device(struct pal_device *device, std::shared_ptr<ResourceManager> Rm);
     Device();
@@ -78,13 +89,15 @@ public:
     static std::shared_ptr<Device> getInstance(struct pal_device *device,
                                                std::shared_ptr<ResourceManager> Rm);
     int getSndDeviceId();
-    int getDeviceCount() { return deviceCount; }
+    int getDeviceCount();
     std::string getPALDeviceName();
     int setDeviceAttributes(struct pal_device dattr);
-    virtual int getDeviceAttributes(struct pal_device *dattr);
+    virtual int getDeviceAttributes(struct pal_device *dattr,
+                                    Stream* streamHandle = NULL);
     virtual int getCodecConfig(struct pal_media_config *config);
     static std::shared_ptr<Device> getObject(pal_device_id_t dev_id);
     int updateCustomPayload(void *payload, size_t size);
+    int updateCustomAnalogMicControls();
     void* getCustomPayload();
     size_t getCustomPayloadSize();
     virtual int32_t setDeviceParameter(uint32_t param_id, void *param);
@@ -96,10 +109,18 @@ public:
     void clearSndName () { UpdatedSndName.clear();}
     virtual ~Device();
     void getCurrentSndDevName(char *name);
-    uint32_t getCurrentPriority(){return mCurrentPriority;};
-    void setCurrentPrioirty(uint32_t prio){mCurrentPriority = prio;};
+    void setSampleRate(uint32_t sr){mSampleRate = sr;};
+    void setBitWidth(uint32_t bw) {mBitWidth = bw;};
     void lockDeviceMutex() { mDeviceMutex.lock(); };
     void unlockDeviceMutex() { mDeviceMutex.unlock(); };
+    bool compareStreamDevAttr(const struct pal_device *inDevAttr,
+                        const struct pal_device_info *inDevInfo,
+                        struct pal_device *curDevAttr,
+                        const struct pal_device_info *curDevInfo);
+    int insertStreamDeviceAttr(struct pal_device *deviceAttr,
+                                Stream* streamHandle);
+    void removeStreamDeviceAttr(Stream* streamHandle);
+    int getTopPriorityDeviceAttr(struct pal_device *deviceAttr, uint32_t *streamPrio);
 };
 
 

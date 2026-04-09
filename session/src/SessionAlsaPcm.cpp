@@ -26,8 +26,8 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -159,7 +159,10 @@ int SessionAlsaPcm::open(Stream * s)
                 rm->freeFrontEndIds(pcmDevIds, sAttr, ldir);
                 frontEndIdAllocated = false;
             } else {
-                if (sAttr.type != PAL_STREAM_CONTEXT_PROXY) {
+                // CONTEXT_PROXY,VOICE_CALL_RECORD and VOICE_CALL_MUSIC are excluded from mic occlusion detection
+                // as they uses different audio paths that don't require this feature. 
+                // Mic occlusion is only relevant for device microphone input.
+                if (shouldRegisterMicOcclusionEvent(sAttr.type)){
                     // Register for  mixer event callback for mic occlusion.
                     status = rm->registerMixerEventCallback(pcmDevIds, sessionCb,
                             cbCookie, true);
@@ -1232,7 +1235,7 @@ set_mixer:
             }
 
             if (!status && isMixerEventCbRegd &&
-                (sAttr.type != PAL_STREAM_CONTEXT_PROXY)) {
+                shouldRegisterMicOcclusionEvent(sAttr.type)) {
                 // Register for callback for Mic Occlusion Notification
                 size_t payload_size = 0;
                 struct agm_event_reg_cfg event_cfg;
@@ -1447,7 +1450,7 @@ int SessionAlsaPcm::stop(Stream * s)
             }
             // Deregister for callback for Mic Occlusion
             if (!status && isMicOcclusionRegistrationDone &&
-                (sAttr.type != PAL_STREAM_CONTEXT_PROXY)) {
+                shouldRegisterMicOcclusionEvent(sAttr.type)) {
                 payload_size = sizeof(struct agm_event_reg_cfg);
                 memset(&event_cfg, 0, sizeof(event_cfg));
                 event_cfg.event_id = EVENT_ID_MIC_OCCLUSION_STATUS_INFO;
@@ -1650,7 +1653,7 @@ int SessionAlsaPcm::close(Stream * s)
 
             // Deregister callback for Mixer Event
             if (!status && isMixerEventCbRegd &&
-                (sAttr.type != PAL_STREAM_CONTEXT_PROXY)) {
+                shouldRegisterMicOcclusionEvent(sAttr.type)) {
                 status = rm->registerMixerEventCallback(pcmDevIds,
                     sessionCb, cbCookie, false);
                 if (status == 0) {
@@ -1841,7 +1844,7 @@ int SessionAlsaPcm::disconnectSessionDevice(Stream *streamHandle,
         int cnt = 0;
             // Deregister for callback for Mic Occlusion during device switch
             if (!status && isMicOcclusionRegistrationDone &&
-                (streamType != PAL_STREAM_CONTEXT_PROXY)) {
+                shouldRegisterMicOcclusionEvent(streamType)) {
                 payload_size = sizeof(struct agm_event_reg_cfg);
                 memset(&event_cfg, 0, sizeof(event_cfg));
                 event_cfg.event_id = EVENT_ID_MIC_OCCLUSION_STATUS_INFO;
@@ -1961,7 +1964,7 @@ int SessionAlsaPcm::connectSessionDevice(Stream* streamHandle, pal_stream_type_t
         /* Re-register for the new device during device switch.*/
 
         if (!status && isMixerEventCbRegd &&
-            (streamType != PAL_STREAM_CONTEXT_PROXY)) {
+             shouldRegisterMicOcclusionEvent(streamType)) {
             // Register for callback for Mic Occlusion Notification
             size_t payload_size = 0;
             struct agm_event_reg_cfg event_cfg;
@@ -2627,7 +2630,7 @@ int SessionAlsaPcm::setECRef(Stream *s, std::shared_ptr<Device> rx_dev, bool is_
 
     rxDevInfo.isExternalECRefEnabledFlag = 0;
     if (rx_dev) {
-        status = rx_dev->getDeviceAttributes(&rxDevAttr);
+        status = rx_dev->getDeviceAttributes(&rxDevAttr, s);
         if (status != 0) {
             PAL_ERR(LOG_TAG," get device attributes failed");
             goto exit;
@@ -2638,7 +2641,7 @@ int SessionAlsaPcm::setECRef(Stream *s, std::shared_ptr<Device> rx_dev, bool is_
         rxDevAttr.id = ecRefDevId;
         rx_dev = Device::getInstance(&rxDevAttr, rm);
         if (rx_dev) {
-            status = rx_dev->getDeviceAttributes(&rxDevAttr);
+            status = rx_dev->getDeviceAttributes(&rxDevAttr, s);
             if (status) {
                 PAL_ERR(LOG_TAG, "getDeviceAttributes failed for ec dev: %d", ecRefDevId);
                 goto exit;

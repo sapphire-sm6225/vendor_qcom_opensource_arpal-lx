@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -26,6 +25,10 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #define LOG_TAG "PAL: API"
@@ -33,6 +36,7 @@
 #include <set>
 #include <unistd.h>
 #include <stdlib.h>
+#include <mutex>
 #include <PalApi.h>
 #include "Stream.h"
 #include "Device.h"
@@ -46,6 +50,13 @@ class Stream;
  * Prerequisites
  *   Should be call from CATF
  */
+
+const char* pal_get_version( ){
+    return PAL_VERSION;
+}
+
+static std::mutex pal_mutex;
+static uint32_t pal_init_ref_cnt = 0;
 
 /*void enable_gcov()
 {
@@ -81,6 +92,14 @@ int32_t pal_init(void)
     PAL_DBG(LOG_TAG, "Enter.");
     int32_t ret = 0;
     std::shared_ptr<ResourceManager> ri = NULL;
+
+    pal_mutex.lock();
+
+    if (pal_init_ref_cnt++ > 0) {
+        PAL_DBG(LOG_TAG, "PAL already initialized, cnt: %d", pal_init_ref_cnt);
+        goto exit;
+    }
+
     try {
         ri = ResourceManager::getInstance();
     } catch (const std::exception& e) {
@@ -88,12 +107,14 @@ int32_t pal_init(void)
         ret = -EINVAL;
         goto exit;
     }
+
+#ifndef CARD_STATE_UNSUPPORTED
     ret = ri->initSndMonitor();
     if (ret != 0) {
         PAL_ERR(LOG_TAG, "snd monitor init failed");
         goto exit;
     }
-
+#endif
     ri->init();
 
     ret = ri->initContextManager();
@@ -103,6 +124,7 @@ int32_t pal_init(void)
     }
 
 exit:
+    pal_mutex.unlock();
     PAL_DBG(LOG_TAG, "Exit. exit status : %d ", ret);
     return ret;
 }
@@ -119,6 +141,16 @@ void pal_deinit(void)
 
     std::shared_ptr<ResourceManager> ri = NULL;
 
+    pal_mutex.lock();
+    if (pal_init_ref_cnt > 0) {
+        pal_init_ref_cnt--;
+        PAL_DBG(LOG_TAG, "decrease pal ref cnt to %d", pal_init_ref_cnt);
+        if (pal_init_ref_cnt > 0)
+            goto exit;
+    } else {
+        PAL_ERR(LOG_TAG, "pal not initialized yet");
+        goto exit;
+    }
     try {
         ri = ResourceManager::getInstance();
     } catch (const std::exception& e) {
@@ -127,6 +159,8 @@ void pal_deinit(void)
     ri->deInitContextManager();
 
     ResourceManager::deinit();
+exit:
+    pal_mutex.unlock();
     PAL_DBG(LOG_TAG, "Exit.");
     return;
 }
@@ -1001,8 +1035,8 @@ int32_t pal_stream_set_device(pal_stream_handle_t *stream_handle,
     struct pal_stream_attributes sattr;
     struct pal_device_info devinfo = {};
     struct pal_device *pDevices = NULL;
+    struct pal_device activeDevAttr;
     std::vector <std::shared_ptr<Device>> aDevices;
-    std::vector <struct pal_device> palDevices;
 
     if (!stream_handle) {
         status = -EINVAL;
@@ -1059,27 +1093,24 @@ int32_t pal_stream_set_device(pal_stream_handle_t *stream_handle,
         goto exit;
     }
 
-    s->getAssociatedPalDevices(palDevices);
     s->getAssociatedDevices(aDevices);
-    if (!palDevices.empty() && !aDevices.empty()) {
-        std::set<pal_device_id_t> activeDevices, curPalDevices;
+    if (!aDevices.empty()) {
+        std::set<pal_device_id_t> activeDevices;
         std::set<pal_device_id_t> newDevices;
         bool force_switch = s->isA2dpMuted();
 
-        for (auto &dev : aDevices)
+        for (auto &dev : aDevices) {
             activeDevices.insert((pal_device_id_t)dev->getSndDeviceId());
-
-        for (auto palDev: palDevices) {
-            curPalDevices.insert(palDev.id);
-            // check if custom key matches for stream associated pal device
+            // check if custom key matches for same device
             for (int i = 0; i < no_of_devices; i++) {
-                if (palDev.id == devices[i].id) {
+                if (dev->getSndDeviceId() == devices[i].id) {
+                    dev->getDeviceAttributes(&activeDevAttr, s);
                     if (strcmp(devices[i].custom_config.custom_key,
-                        palDev.custom_config.custom_key) != 0) {
+                        activeDevAttr.custom_config.custom_key) != 0) {
                         PAL_DBG(LOG_TAG, "diff custom key found, force device switch");
                         force_switch = true;
+                        break;
                     }
-                    break;
                 }
             }
             if (force_switch)
@@ -1097,8 +1128,7 @@ int32_t pal_stream_set_device(pal_stream_handle_t *stream_handle,
                 }
             }
         }
-        if (!force_switch && (activeDevices == newDevices) &&
-                             (curPalDevices == newDevices)) {
+        if (!force_switch && (activeDevices == newDevices)) {
             status = 0;
             PAL_DBG(LOG_TAG, "devices are same, no need to switch");
             goto exit;
